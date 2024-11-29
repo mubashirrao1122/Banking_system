@@ -1,245 +1,580 @@
+/*
+/*
+Project: A Simple Banking System Simulation in C++
+
+Objective:
+Simulate a banking system that allows multiple customers to perform transactions concurrently. The system will demonstrate core operating system concepts, including process creation, multithreading, synchronization, CPU scheduling, memory management, inter-process communication (IPC), logging, and error handling.
+
+---
+
+Functional Requirements:
+1. **System Call Interface**:
+   - Implement API functions for customer operations:
+     - `create_account(int customer_id, float initial_balance)`: Create a new account with a unique account ID.
+     - `deposit(int account_id, float amount)`: Deposit money into a specified account.
+     - `withdraw(int account_id, float amount)`: Withdraw money from an account, with error handling for insufficient funds.
+     - `check_balance(int account_id)`: Retrieve the current balance of an account.
+
+2. **Process Creation**:
+   - Each transaction (e.g., deposit, withdrawal) is treated as a separate process.
+   - Maintain a **process table** that tracks:
+     - Transaction ID
+     - Process state (e.g., Ready, Running, Waiting, Terminated)
+     - Associated account and customer details.
+
+3. **Multithreading & Synchronization**:
+   - Use threads for concurrent execution of transactions.
+   - Synchronize shared account data access using:
+     - `std::mutex` or `std::semaphore` for locking.
+     - Prevent race conditions or data inconsistencies.
+   - Ensure threads for a single customer handle transactions safely.
+
+4. **CPU Scheduling**:
+   - Implement a **Round Robin scheduler**:
+     - Allocate fixed time slices (quantum) to each transaction process.
+     - Track metrics like **average waiting time** and **CPU utilization**.
+   - Visualize scheduling with a **Gantt chart**.
+
+5. **Memory Management**:
+   - Divide memory into **pages** for storing:
+     - Account details (e.g., balances, IDs).
+     - Transaction logs.
+   - Use the **Least Recently Used (LRU)** algorithm for page replacement.
+   - Display a **memory map** showing how pages are allocated and replaced.
+
+6. **Inter-Process Communication (IPC)**:
+   - Use **message queues** to enable communication between processes.
+   - Support both synchronous (blocking) and asynchronous (non-blocking) communication.
+   - Notify processes about transaction completions or errors.
+
+7. **Logging**:
+   - Maintain a **transaction log file** (`transactions.log`):
+     - Record transaction details (type, account ID, amount, timestamp).
+   - Maintain an **error log file** (`errors.log`):
+     - Log errors like insufficient funds, invalid account IDs, or deadlocks.
+   - Use `std::fstream` for file handling.
+
+8. **Error Handling**:
+   - Handle errors gracefully:
+     - Insufficient funds during withdrawals.
+     - Invalid account IDs.
+     - Deadlocks or resource contention issues.
+   - Provide meaningful error messages to users.
+   - Log all errors for debugging and analysis.
+
+---
+
+Additional Technical Requirements:
+1. **Modular Design**:
+   - Implement each feature as a separate class or function.
+   - Example modules:
+     - `AccountManager`: For account operations.
+     - `ProcessManager`: For process creation and management.
+     - `Scheduler`: For CPU scheduling.
+     - `MemoryManager`: For paging and memory management.
+     - `Logger`: For transaction and error logging.
+     - `IPCManager`: For message queue handling.
+
+2. **Libraries to Use**:
+   - `#include <thread>` for multithreading.
+   - `#include <mutex>` for synchronization.
+   - `#include <queue>` for message queues.
+   - `#include <map>` and `#include <list>` for data structures.
+   - `#include <fstream>` for file logging.
+
+3. **Best Practices**:
+   - Use **comments** to explain critical sections.
+   - Ensure thread safety using locks and proper synchronization.
+   - Follow modern C++ standards (C++17 or above).
+   - Prioritize clean, readable, and maintainable code.
+
+---
+
+Output Expectations:
+1. A fully functional C++ program demonstrating:
+   - Account creation, deposit, withdrawal, and balance checking.
+   - Concurrent transactions with synchronized access.
+   - CPU scheduling with metrics and a Gantt chart.
+   - Efficient memory management using paging and LRU replacement.
+   - Logging and error handling for all operations.
+2. Detailed comments explaining each module and function.
+
+---
+
+Example User Scenarios:
+1. **Account Creation**:
+   - Customer creates an account with an initial balance.
+   - System assigns a unique account ID and stores the details in memory.
+
+2. **Concurrent Transactions**:
+   - Customer performs a deposit and withdrawal simultaneously.
+   - Threads handle these operations while synchronizing access to shared account data.
+
+3. **CPU Scheduling**:
+   - Multiple transaction processes are scheduled using the Round Robin algorithm.
+   - Time slices are visualized in a Gantt chart.
+
+4. **Error Scenarios**:
+   - A withdrawal request fails due to insufficient funds.
+   - Error is logged and displayed to the user.
+
+5. **Memory Overflow**:
+   - Memory for account details exceeds the allocated limit.
+   - The LRU algorithm replaces old pages with new ones.
+
+---
+
+Write the complete C++ implementation for the above system. Ensure all modules, synchronization, logging, error handling, and visualization are implemented as described. Follow clean and modular coding practices.
+*/
 #include <iostream>
-#include <unordered_map>
+#include <map>
 #include <mutex>
 #include <thread>
-#include <vector>
-#include <algorithm>
-#include <chrono>
+#include <fstream>
 #include <queue>
 #include <list>
-#include <map>
 #include <condition_variable>
-#include <fstream>
-#include <functional>
-#include <string> // Include this header for std::to_string
+#include <chrono>
+#include <vector>
+#include <atomic>
+#include <iomanip>
+#include <ctime>
+#include <string>
 
 using namespace std;
 
-const int PAGE_SIZE = 4096; // Size of a memory page in bytes
-const int MEMORY_SIZE = 10 * PAGE_SIZE; // Total memory size
+// Logger class for transaction and error logging
+class Logger {
+private:
+    ofstream transaction_log;
+    ofstream error_log;
+    mutex log_mtx;
 
-enum class ErrorCode {
-    SUCCESS,
-    ACCOUNT_ALREADY_EXISTS,
-    ACCOUNT_NOT_FOUND,
-    INSUFFICIENT_FUNDS
+    string get_current_time() {
+        auto now = chrono::system_clock::now();
+        time_t now_time = chrono::system_clock::to_time_t(now);
+        char buffer[26];
+        ctime_s(buffer, sizeof(buffer), &now_time);
+        buffer[24] = '\0'; // Remove the newline character
+        return string(buffer);
+    }
+
+public:
+    Logger() {
+        transaction_log.open("transactions.log", ios::app);
+        error_log.open("errors.log", ios::app);
+    }
+
+    ~Logger() {
+        transaction_log.close();
+        error_log.close();
+    }
+
+    void log_transaction(const string& message) {
+        lock_guard<mutex> lock(log_mtx);
+        transaction_log << "[" << get_current_time() << "] " << message << endl;
+    }
+
+    void log_error(const string& message) {
+        lock_guard<mutex> lock(log_mtx);
+        error_log << "[" << get_current_time() << "] " << message << endl;
+    }
 };
 
-// Implement comparison operators for ErrorCode
-bool operator==(const ErrorCode& lhs, const ErrorCode& rhs) {
-    return static_cast<int>(lhs) == static_cast<int>(rhs);
-}
+// AccountManager class for account operations
+class AccountManager {
+private:
+    struct Account {
+        int account_id;
+        int customer_id;
+        float balance;
+    };
 
-bool operator!=(const ErrorCode& lhs, const ErrorCode& rhs) {
-    return !(lhs == rhs);
-}
+    map<int, Account> accounts;
+    mutex mtx;
+    int next_account_id = 1;
+    Logger& logger;
 
-// Overload operator<< for ErrorCode to handle ambiguous operator<<
-ostream& operator<<(ostream& os, const ErrorCode& code) {
-    switch (code) {
-    case ErrorCode::SUCCESS:
-        os << "SUCCESS";
-        break;
-    case ErrorCode::ACCOUNT_ALREADY_EXISTS:
-        os << "ACCOUNT_ALREADY_EXISTS";
-        break;
-    case ErrorCode::ACCOUNT_NOT_FOUND:
-        os << "ACCOUNT_NOT_FOUND";
-        break;
-    case ErrorCode::INSUFFICIENT_FUNDS:
-        os << "INSUFFICIENT_FUNDS";
-        break;
-    }
-    return os;
-}
-
-class BankSystem {
 public:
-    ErrorCode create_account(int customer_id, double initial_balance) {
+    AccountManager(Logger& logger) : logger(logger) {}
+
+    int add_account(int customer_id, float initial_balance) {
         lock_guard<mutex> lock(mtx);
-        if (accounts.find(customer_id) != accounts.end()) {
-            return ErrorCode::ACCOUNT_ALREADY_EXISTS; // Account already exists
-        }
-        accounts[customer_id] = initial_balance;
-        allocate_page(customer_id);
-        return ErrorCode::SUCCESS;
+        int account_id = next_account_id++;
+        accounts[account_id] = { account_id, customer_id, initial_balance };
+        logger.log_transaction("Account created: ID=" + to_string(account_id) + ", Initial Balance=" + to_string(initial_balance));
+        return account_id;
     }
 
-    ErrorCode deposit(int account_id, double amount) {
+    Account get_account(int account_id) {
         lock_guard<mutex> lock(mtx);
-        if (accounts.find(account_id) == accounts.end()) {
-            return ErrorCode::ACCOUNT_NOT_FOUND; // Account does not exist
+        if (accounts.find(account_id) != accounts.end()) {
+            return accounts[account_id];
         }
-        accounts[account_id] += amount;
-        log_transaction(account_id, "deposit", amount);
-        notify_transaction_complete(account_id, "deposit", amount);
-        return ErrorCode::SUCCESS;
+        logger.log_error("Get account failed: Invalid Account ID=" + to_string(account_id));
+        return { -1, -1, -1.0f }; // Indicate invalid account
     }
 
-    ErrorCode withdraw(int account_id, double amount) {
+    bool update_balance(int account_id, float new_balance) {
         lock_guard<mutex> lock(mtx);
-        if (accounts.find(account_id) == accounts.end()) {
-            return ErrorCode::ACCOUNT_NOT_FOUND; // Account does not exist
+        if (accounts.find(account_id) != accounts.end()) {
+            accounts[account_id].balance = new_balance;
+            logger.log_transaction("Balance updated: Account ID=" + to_string(account_id) + ", New Balance=" + to_string(new_balance));
+            return true;
         }
-        if (accounts[account_id] < amount) {
-            return ErrorCode::INSUFFICIENT_FUNDS; // Insufficient funds
-        }
-        accounts[account_id] -= amount;
-        log_transaction(account_id, "withdraw", amount);
-        notify_transaction_complete(account_id, "withdraw", amount);
-        return ErrorCode::SUCCESS;
+        logger.log_error("Update balance failed: Invalid Account ID=" + to_string(account_id));
+        return false;
     }
 
-    pair<ErrorCode, double> check_balance(int account_id) {
+    bool delete_account(int account_id) {
         lock_guard<mutex> lock(mtx);
-        if (accounts.find(account_id) == accounts.end()) {
-            return { ErrorCode::ACCOUNT_NOT_FOUND, -1 }; // Account does not exist
+        if (accounts.erase(account_id)) {
+            logger.log_transaction("Account deleted: ID=" + to_string(account_id));
+            return true;
         }
-        return { ErrorCode::SUCCESS, accounts[account_id] };
+        logger.log_error("Delete account failed: Invalid Account ID=" + to_string(account_id));
+        return false;
     }
 
-    void create_transaction_process(ErrorCode(BankSystem::* transaction)(int, double), int account_id, double amount) {
+    bool deposit(int account_id, float amount) {
         lock_guard<mutex> lock(mtx);
-        transaction_queue.push([=] { (this->*transaction)(account_id, amount); });
+        if (accounts.find(account_id) != accounts.end()) {
+            accounts[account_id].balance += amount;
+            logger.log_transaction("Deposit: Account ID=" + to_string(account_id) + ", Amount=" + to_string(amount));
+            return true;
+        }
+        logger.log_error("Deposit failed: Invalid Account ID=" + to_string(account_id));
+        return false;
     }
 
-    void run_scheduler() {
-        while (!transaction_queue.empty()) {
-            auto transaction = transaction_queue.front();
-            transaction_queue.pop();
-            transaction();
-            this_thread::sleep_for(chrono::milliseconds(time_quantum));
+    bool withdraw(int account_id, float amount) {
+        lock_guard<mutex> lock(mtx);
+        if (accounts.find(account_id) != accounts.end() && accounts[account_id].balance >= amount) {
+            accounts[account_id].balance -= amount;
+            logger.log_transaction("Withdrawal: Account ID=" + to_string(account_id) + ", Amount=" + to_string(amount));
+            return true;
+        }
+        logger.log_error("Withdrawal failed: Insufficient funds or Invalid Account ID=" + to_string(account_id));
+        return false;
+    }
+
+    float check_balance(int account_id) {
+        lock_guard<mutex> lock(mtx);
+        if (accounts.find(account_id) != accounts.end()) {
+            return accounts[account_id].balance;
+        }
+        logger.log_error("Check balance failed: Invalid Account ID=" + to_string(account_id));
+        return -1.0f; // Indicate invalid account
+    }
+};
+
+// ProcessManager class for process creation and management
+class ProcessManager {
+private:
+    struct Process {
+        int transaction_id;
+        string state;
+        int account_id;
+        int customer_id;
+
+        // Constructor to initialize member variables
+        Process(int t_id, const string& st, int a_id, int c_id)
+            : transaction_id(t_id), state(st), account_id(a_id), customer_id(c_id) {
+        }
+    };
+
+    map<int, Process> process_table;
+    mutex mtx;
+    int next_transaction_id = 1;
+
+public:
+    int create_transaction_process(int customer_id, int account_id) {
+        lock_guard<mutex> lock(mtx);
+        int transaction_id = next_transaction_id++;
+        process_table[transaction_id] = Process(transaction_id, "Ready", account_id, customer_id);
+        return transaction_id;
+    }
+
+    void terminate_transaction_process(int transaction_id) {
+        lock_guard<mutex> lock(mtx);
+        if (process_table.find(transaction_id) != process_table.end()) {
+            process_table[transaction_id].state = "Terminated";
+            process_table.erase(transaction_id);
         }
     }
 
-    void set_time_quantum(int tq) {
-        time_quantum = tq;
+    void update_process_state(int transaction_id, const string& state) {
+        lock_guard<mutex> lock(mtx);
+        if (process_table.find(transaction_id) != process_table.end()) {
+            process_table[transaction_id].state = state;
+        }
+    }
+
+    void remove_process(int transaction_id) {
+        lock_guard<mutex> lock(mtx);
+        process_table.erase(transaction_id);
+    }
+
+    map<int, Process> get_process_table() {
+        lock_guard<mutex> lock(mtx);
+        return process_table;
+    }
+};
+
+// Scheduler class for CPU scheduling
+class Scheduler {
+private:
+    queue<int> ready_queue;
+    mutex mtx;
+    condition_variable cv;
+    atomic<bool> running;
+    ProcessManager& process_manager;
+    vector<pair<int, string>> gantt_chart;
+    int time_slice;
+
+public:
+    Scheduler(ProcessManager& pm, int ts) : process_manager(pm), running(true), time_slice(ts) {}
+
+    void add_to_ready_queue(int transaction_id) {
+        lock_guard<mutex> lock(mtx);
+        ready_queue.push(transaction_id);
+        cv.notify_one();
+    }
+
+    void stop() {
+        running = false;
+        cv.notify_all();
+    }
+
+    void run() {
+        while (running) {
+            unique_lock<mutex> lock(mtx);
+            cv.wait(lock, [this] { return !ready_queue.empty() || !running; });
+
+            if (!running) break;
+
+            int transaction_id = ready_queue.front();
+            ready_queue.pop();
+            lock.unlock();
+
+            process_manager.update_process_state(transaction_id, "Running");
+            this_thread::sleep_for(chrono::milliseconds(time_slice)); // Simulate process execution
+            process_manager.update_process_state(transaction_id, "Terminated");
+
+            gantt_chart.push_back({ transaction_id, "Running" });
+        }
+    }
+
+    void display_gantt_chart() {
+        cout << "Gantt Chart:" << endl;
+        for (const auto& entry : gantt_chart) {
+            cout << "Transaction ID: " << entry.first << " - State: " << entry.second << endl;
+        }
+    }
+};
+
+// MemoryManager class for paging and memory management
+class MemoryManager {
+private:
+    struct Page {
+        int account_id;
+        float balance;
+    };
+
+    list<Page> memory;
+    size_t max_pages;
+    mutex mtx;
+
+public:
+    MemoryManager(size_t max_pages) : max_pages(max_pages) {}
+
+    void store_data_in_page(int account_id, float balance) {
+        lock_guard<mutex> lock(mtx);
+        if (memory.size() >= max_pages) {
+            replace_page(account_id, balance);
+        }
+        else {
+            memory.push_back({ account_id, balance });
+        }
+    }
+
+    void replace_page(int account_id, float balance) {
+        lock_guard<mutex> lock(mtx);
+        memory.pop_front(); // Remove the least recently used page
+        memory.push_back({ account_id, balance });
     }
 
     void display_memory_map() {
         lock_guard<mutex> lock(mtx);
         cout << "Memory Map:" << endl;
-        for (const auto& page : memory_pages) {
-            cout << "Page " << page.first << ": Account " << page.second << endl;
+        for (const auto& page : memory) {
+            cout << "Account ID: " << page.account_id << ", Balance: " << page.balance << endl;
         }
-    }
-
-    void wait_for_transaction_complete() {
-        unique_lock<mutex> lock(cv_mtx);
-        cv.wait(lock, [this] { return !message_queue.empty(); });
-        while (!message_queue.empty()) {
-            auto message = message_queue.front();
-            message_queue.pop();
-            cout << "Transaction complete: " << message << endl;
-        }
-    }
-
-private:
-    unordered_map<int, double> accounts;
-    mutex mtx;
-    queue<function<void()>> transaction_queue;
-    int time_quantum = 100; // Default time quantum in milliseconds
-
-    list<int> lru_list; // List to track LRU pages
-    map<int, int> memory_pages; // Map to track page allocations (page number -> account ID)
-
-    queue<string> message_queue; // Message queue for IPC
-    condition_variable cv; // Condition variable for IPC
-    mutex cv_mtx; // Mutex for condition variable
-
-    void allocate_page(int account_id) {
-        if (memory_pages.size() >= MEMORY_SIZE / PAGE_SIZE) {
-            // Memory is full, apply LRU page replacement
-            int lru_page = lru_list.back();
-            lru_list.pop_back();
-            memory_pages.erase(lru_page);
-        }
-        int new_page = static_cast<int>(memory_pages.size());
-        memory_pages[new_page] = account_id;
-        lru_list.push_front(new_page);
-    }
-
-    void log_transaction(int account_id, const string& type, double amount) {
-        // Simulate logging transaction to memory
-        allocate_page(account_id);
-        ofstream log_file("transaction_log.txt", ios::app);
-        log_file << "Logged " << type << " of " << amount << " for account " << account_id << endl;
-        log_file.close();
-    }
-
-    void notify_transaction_complete(int account_id, const string& type, double amount) {
-        lock_guard<mutex> lock(cv_mtx);
-        message_queue.push("Account " + to_string(account_id) + ": " + type + " of " + to_string(amount));
-        cv.notify_all();
     }
 };
 
-static void simulate_transactions(BankSystem& bank, int account_id) {
-    bank.create_transaction_process(&BankSystem::deposit, account_id, 500.0);
-    bank.create_transaction_process(&BankSystem::withdraw, account_id, 200.0);
-}
+// IPCManager class for message queue handling
+class IPCManager {
+private:
+    queue<string> message_queue;
+    mutex mtx;
+    condition_variable cv;
 
-static void handle_error(ErrorCode code) {
-    switch (code) {
-    case ErrorCode::SUCCESS:
-        cout << "Operation successful." << endl;
-        break;
-    case ErrorCode::ACCOUNT_ALREADY_EXISTS:
-        cout << "Error: Account already exists." << endl;
-        break;
-    case ErrorCode::ACCOUNT_NOT_FOUND:
-        cout << "Error: Account not found." << endl;
-        break;
-    case ErrorCode::INSUFFICIENT_FUNDS:
-        cout << "Error: Insufficient funds." << endl;
-        break;
+public:
+    void send_message(const string& message) {
+        lock_guard<mutex> lock(mtx);
+        message_queue.push(message);
+        cv.notify_one();
+    }
+
+    string receive_message(bool blocking = true) {
+        unique_lock<mutex> lock(mtx);
+        if (blocking) {
+            cv.wait(lock, [this] { return !message_queue.empty(); });
+        }
+        else {
+            if (message_queue.empty()) {
+                return "";
+            }
+        }
+        string message = message_queue.front();
+        message_queue.pop();
+        return message;
+    }
+};
+
+// Error Handling Module
+class ErrorHandler {
+private:
+    Logger& logger;
+
+public:
+    ErrorHandler(Logger& logger) : logger(logger) {}
+
+    void handle_error(const string& error_message) {
+        logger.log_error(error_message);
+    }
+
+    bool validate_account_id(int account_id, AccountManager& accountManager) {
+        if (accountManager.get_account(account_id).account_id == -1) {
+            handle_error("Invalid Account ID: " + to_string(account_id));
+            return false;
+        }
+        return true;
+    }
+
+    bool validate_amount(float amount) {
+        if (amount <= 0) {
+            handle_error("Invalid amount: " + to_string(amount));
+            return false;
+        }
+        return true;
+    }
+};
+
+// System Call Interface Module
+class SystemCallInterface {
+private:
+    AccountManager& accountManager;
+    ErrorHandler& errorHandler;
+
+public:
+    SystemCallInterface(AccountManager& am, ErrorHandler& eh) : accountManager(am), errorHandler(eh) {}
+
+    int create_account(int customer_id, float initial_balance) {
+        if (initial_balance < 0) {
+            errorHandler.handle_error("Create account failed: Initial balance cannot be negative.");
+            return -1;
+        }
+        return accountManager.add_account(customer_id, initial_balance);
+    }
+
+    bool deposit(int account_id, float amount) {
+        if (!errorHandler.validate_account_id(account_id, accountManager) || !errorHandler.validate_amount(amount)) {
+            return false;
+        }
+        return accountManager.deposit(account_id, amount);
+    }
+
+    bool withdraw(int account_id, float amount) {
+        if (!errorHandler.validate_account_id(account_id, accountManager) || !errorHandler.validate_amount(amount)) {
+            return false;
+        }
+        return accountManager.withdraw(account_id, amount);
+    }
+
+    float check_balance(int account_id) {
+        if (!errorHandler.validate_account_id(account_id, accountManager)) {
+            return -1.0f;
+        }
+        return accountManager.check_balance(account_id);
+    }
+};
+
+// Multithreading & Synchronization Module
+void run_transaction(SystemCallInterface& sysCallInterface, int account_id, float amount, bool is_deposit) {
+    if (is_deposit) {
+        sysCallInterface.deposit(account_id, amount);
+    }
+    else {
+        sysCallInterface.withdraw(account_id, amount);
     }
 }
 
-int main()
-{
-    BankSystem bank;
-    ErrorCode result;
+int main() {
+    Logger logger;
+    AccountManager accountManager(logger);
+    ErrorHandler errorHandler(logger);
+    ProcessManager processManager;
+    Scheduler scheduler(processManager, 100); // 100 milliseconds time slice
+    MemoryManager memoryManager(5);
+    IPCManager ipcManager;
+    SystemCallInterface sysCallInterface(accountManager, errorHandler);
 
-    // Create account
-    result = bank.create_account(1, 1000.0);
-    handle_error(result);
+    thread scheduler_thread(&Scheduler::run, &scheduler);
 
-    // Simulate concurrent transactions
-    thread t1(simulate_transactions, ref(bank), 1);
-    thread t2(simulate_transactions, ref(bank), 1);
+    // Example usage
+    int account_id1 = sysCallInterface.create_account(1, 1000.0f);
+    int account_id2 = sysCallInterface.create_account(2, 2000.0f);
+    cout << "Account ID 1: " << account_id1 << endl;
+    cout << "Account ID 2: " << account_id2 << endl;
+
+    thread t1(run_transaction, ref(sysCallInterface), account_id1, 500.0f, true);
+    thread t2(run_transaction, ref(sysCallInterface), account_id1, 200.0f, false);
+    thread t3(run_transaction, ref(sysCallInterface), account_id2, 300.0f, true);
+    thread t4(run_transaction, ref(sysCallInterface), account_id2, 100.0f, false);
 
     t1.join();
     t2.join();
+    t3.join();
+    t4.join();
 
-    // Set time quantum for Round Robin scheduling
-    bank.set_time_quantum(100);
+    cout << "Balance after transactions for Account ID 1: " << sysCallInterface.check_balance(account_id1) << endl;
+    cout << "Balance after transactions for Account ID 2: " << sysCallInterface.check_balance(account_id2) << endl;
 
-    // Run the scheduler
-    bank.run_scheduler();
+    int transaction_id1 = processManager.create_transaction_process(1, account_id1);
+    int transaction_id2 = processManager.create_transaction_process(2, account_id2);
+    scheduler.add_to_ready_queue(transaction_id1);
+    scheduler.add_to_ready_queue(transaction_id2);
 
-    // Check balance
-    auto [code, balance] = bank.check_balance(1);
-    handle_error(code);
-    if (code == ErrorCode::SUCCESS) {
-        cout << "Balance for account 1: " << balance << "\n";
-    }
+    memoryManager.store_data_in_page(account_id1, sysCallInterface.check_balance(account_id1));
+    memoryManager.store_data_in_page(account_id2, sysCallInterface.check_balance(account_id2));
+    memoryManager.display_memory_map();
 
-    // Display memory map
-    bank.display_memory_map();
+    ipcManager.send_message("Transaction completed for Account ID 1");
+    ipcManager.send_message("Transaction completed for Account ID 2");
+    cout << "IPC Message 1: " << ipcManager.receive_message() << endl;
+    cout << "IPC Message 2: " << ipcManager.receive_message() << endl;
 
-    // Wait for transaction completions
-    bank.wait_for_transaction_complete();
+    processManager.terminate_transaction_process(transaction_id1);
+    processManager.terminate_transaction_process(transaction_id2);
 
-    // Run program: Ctrl + F5 or Debug > Start Without Debugging menu
-    // Debug program: F5 or Debug > Start Debugging menu
+    scheduler.stop();
+    scheduler_thread.join();
 
-    // Tips for Getting Started: 
-    //   1. Use the Solution Explorer window to add/manage files
-    //   2. Use the Team Explorer window to connect to source control
-    //   3. Use the Output window to see build output and other messages
-    //   4. Use the Error List window to view errors
-    //   5. Go to Project > Add New Item to create new code files, or Project > Add Existing Item to add existing code files to the project
-    //   6. In the future, to open this project again, go to File > Open > Project and select the .sln file
+    scheduler.display_gantt_chart();
+
+    return 0;
 }
+
 
